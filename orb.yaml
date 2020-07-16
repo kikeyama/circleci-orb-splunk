@@ -1,0 +1,190 @@
+version: 2.1
+description: Send build and deploy results to Splunk
+display:
+  source_url: https://github.com/kikeyama/circleci-orb-splunk
+
+executors:
+  base:
+    docker:
+      - image: cibuilds/base:latest
+        environment:
+          TERM: dumb
+    resource_class: small
+
+commands:
+  build-event:
+    description: Send build event to Splunk
+    parameters:
+      subject:
+        default: build_event
+        description: Event type stored in the event data
+        type: string
+      message:
+        default: ''
+        description: Type your message here
+        type: string
+      splunk_hec_host:
+        description: (Required) Hostname or IP address of Splunk HEC ingestion endpoint
+        type: string
+      splunk_hec_port:
+        default: 8088
+        description: (Required) Port number of Splunk HEC ingestion endpoint
+        type: integer
+      splunk_hec_protocol:
+        default: https
+        description: Protocol (http or https) of Splunk HEC ingestion endpoint
+        type: string
+      splunk_hec_token:
+        description: (Required) Splunk HTTP Event Collector token
+        type: string
+      splunk_index:
+        default: main
+        description: Index name
+        type: string
+      splunk_host:
+        default: circleci.com
+        description: host value in the event data
+        type: string
+      splunk_source:
+        default: ${CIRCLE_BUILD_URL}
+        description: source value in the event data
+        type: string
+      splunk_sourcetype:
+        default: circleci:build:event
+        description: sourcetype value in the event data
+        type: string
+    steps:
+      - run:
+          when: on_success
+          name: set_status_success
+          command: |
+            echo 'export BUILD_STATUS="success"' >> $BASH_ENV
+      - run:
+          when: on_fail
+          name: set_status_failure
+          command: |
+            echo 'export BUILD_STATUS="failure"' >> $BASH_ENV
+      - run: 
+          command: |
+            echo "{
+              \"index\": \"<<parameters.splunk_index>>\",
+              \"host\": \"<<parameters.splunk_host>>\",
+              \"source\": \"<<parameters.splunk_source>>\",
+              \"sourcetype\": \"<<parameters.splunk_sourcetype>>\",
+              \"event\": {
+                \"subject\": \"<<parameters.subject>>\",
+                \"message\": \"<<parameters.message>>\",
+                \"timestamp\": `date +%s.%3N`,
+                \"reponame\": \"$CIRCLE_PROJECT_REPONAME\",
+                \"status\": \"$BUILD_STATUS\",
+                \"vcs_revision\": \"$CIRCLE_SHA1\",
+                \"vcs_url\": \"$CIRCLE_REPOSITORY_URL\",
+                \"vcs_pr_username\": \"$CIRCLE_PR_USERNAME\",
+                \"vcs_pr_urls\": \"$CIRCLE_PULL_REQUESTS\",
+                \"vcs_commiter_name\": \"$CIRCLE_USERNAME\",
+                \"vcs_tag\": \"$CIRCLE_TAG\",
+                \"vcs_branch\": \"$CIRCLE_BRANCH\",
+                \"build_num\": \"$CIRCLE_BUILD_NUM\",
+                \"build_url\": \"$CIRCLE_BUILD_URL\",
+                \"username\": \"$CIRCLE_PROJECT_USERNAME\",
+                \"workflow_id\": \"$CIRCLE_WORKFLOW_ID\"
+              }
+            }" | jq . -c > ./tmp_payload.json
+            curl -X POST -H "Content-Type:application/json" \
+            -H "Authorization: Splunk <<parameters.splunk_hec_token>>" \
+            --data @./tmp_payload.json \
+            <<parameters.splunk_hec_protocol>>://<<parameters.splunk_hec_host>>:<<parameters.splunk_hec_port>>/services/collector/event
+          name: post_splunk
+
+jobs:
+  workflow-event:
+    parameters:
+      subject:
+        default: workflow_event
+        description: Event type stored in the event data
+        type: string
+      message:
+        default: ''
+        description: Type your message here
+        type: string
+      splunk_hec_host:
+        description: (Required) Hostname or IP address of Splunk HEC ingestion endpoint
+        type: string
+      splunk_hec_port:
+        default: 8088
+        description: (Required) Port number of Splunk HEC ingestion endpoint
+        type: integer
+      splunk_hec_protocol:
+        default: https
+        description: Protocol (http or https) of Splunk HEC ingestion endpoint
+        type: string
+      splunk_hec_token:
+        description: (Required) Splunk HTTP Event Collector token
+        type: string
+      splunk_index:
+        default: main
+        description: Index name
+        type: string
+      splunk_host:
+        default: circleci.com
+        description: host value in the event data
+        type: string
+      splunk_source:
+        default: ${CIRCLE_WORKFLOW_ID}
+        description: source value in the event data
+        type: string
+      splunk_sourcetype:
+        default: circleci:workflow:event
+        description: sourcetype value in the event data
+        type: string
+    executor: base
+    steps:
+      - build-event:
+          subject: <<parameters.subject>>
+          message: <<parameters.message>>
+          splunk_hec_host: <<parameters.splunk_hec_host>>
+          splunk_hec_port: <<parameters.splunk_hec_port>>
+          splunk_hec_protocol: <<parameters.splunk_hec_protocol>>
+          splunk_hec_token: <<parameters.splunk_hec_token>>
+          splunk_index: <<parameters.splunk_index>>
+          splunk_host: <<parameters.splunk_host>>
+          splunk_source: <<parameters.splunk_source>>
+          splunk_sourcetype: <<parameters.splunk_sourcetype>>
+
+examples:
+  workflow-event:
+    usage:
+      version: 2.1
+      description: Send workflow event to Splunk
+      orbs:
+        splunk: kikeyama/splunk@x.y.z
+      workflows:
+        main:
+          jobs:
+            - splunk/workflow-event:
+                subject: notificatoin from main workflow
+                message: Successfully finisheed deploying to my cluster
+                splunk_hec_host: ${SPLUNK_HEC_HOST}
+                splunk_hec_port: 8088
+                splunk_hec_protocol: https
+                splunk_hec_token: ${SPLUNK_HEC_TOKEN}
+                splunk_index: circleci
+  build-event:
+    usage:
+      version: 2.1
+      description: Send build event to Splunk
+      orbs:
+        splunk: kikeyama/splunk@x.y.z
+      jobs:
+        build:
+          docker:
+            - image: <docker image>
+          steps:
+            - splunk/build-event:
+                subject: notificatoin from build job
+                message: Successfully finished build
+                splunk_hec_host: ${SPLUNK_HEC_HOST}
+                splunk_hec_port: 8088
+                splunk_hec_protocol: https
+                splunk_hec_token: ${SPLUNK_HEC_TOKEN}
+                splunk_index: circleci
